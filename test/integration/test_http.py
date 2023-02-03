@@ -264,6 +264,68 @@ class TestHTTP(unittest.TestCase):
         status = txn2.end()
         self.assertEqual(status.code, 200)
 
+            # Test read write conflict between two transactions
+    def test_read_write_txn1(self):
+        # Populate initial data, Begin Txn
+        record = TestHTTP.schema.make_record(partitionKey=b"ptest4", rangeKey=b"rtest4", data=b"data4")
+        if True:
+            status, txn = TestHTTP.cl.begin_txn()
+            self.assertEqual(status.code, 201)
+
+            # Write initial data
+
+            status = txn.write(TestHTTP.cname, record)
+            self.assertEqual(status.code, 201)
+
+            # Commit initial data
+            status = txn.end()
+            self.assertEqual(status.code, 200)
+
+        # Begin Txn 1
+        status, txn1 = TestHTTP.cl.begin_txn()
+        self.assertEqual(status.code, 201)
+
+        # Read by Txn 1
+        status, resultRec = txn1.read(TestHTTP.cname, record)
+        self.assertEqual(status.code, 200)
+        self.assertEqual(resultRec.fields.partitionKey, b"ptest4")
+        self.assertEqual(resultRec.fields.rangeKey, b"rtest4")
+        self.assertEqual(resultRec.fields.data, b"data4")
+
+        # Update data by Txn 1
+        # this key (or key range) has been observed by another transaction.
+        record1 = TestHTTP.schema.make_record(partitionKey=b"ptest4", rangeKey=b"rtest4", data=b"data4_1")
+        status = txn1.write(TestHTTP.cname, record1)
+        self.assertEqual(status.code, 201)
+
+        # Begin Txn 2
+        status, txn2 = TestHTTP.cl.begin_txn()
+        self.assertEqual(status.code, 201)
+
+        # Read by Txn 2
+        status, resultRec = txn2.read(TestHTTP.cname, record)
+        self.assertEqual(status.code, 200)
+        self.assertEqual(resultRec.fields.partitionKey, b"ptest4")
+        self.assertEqual(resultRec.fields.rangeKey, b"rtest4")
+        self.assertEqual(resultRec.fields.data, b"data4")
+        returned_data = resultRec.fields.data
+        new_data = b"data4_2" if returned_data == b"data4" else b"data4_3"
+
+        # Commit Txn 1, same error as write request
+        status = txn1.end()
+        self.assertEqual(status.code, 200)
+
+        # Update data by Txn 2, should fail with 403: write request cannot be allowed as
+        # this key (or key range) has been observed by another transaction.
+        record2 = TestHTTP.schema.make_record(partitionKey=b"ptest4", rangeKey=b"rtest4",
+                                              data=returned_data)
+        status = txn2.write(TestHTTP.cname, record2)
+        self.assertEqual(status.code, 200)
+
+        # Commit Txn 2, should succeed
+        status = txn2.end()
+        self.assertEqual(status.code, 200)
+
     def test_collection_schema_basic(self):
         test_coll =  b'HTTPProxy1'
         metadata = CollectionMetadata(name =test_coll,
